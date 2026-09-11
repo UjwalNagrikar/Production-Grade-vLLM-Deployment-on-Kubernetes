@@ -1,23 +1,28 @@
 variable "region" {
-  type    = string
-  default = "ap-south-1"
+  description = "AWS region"
+  type        = string
+  default     = "ap-south-1"
 }
 
 variable "instance_type" {
-  type    = string
-  default = "g4dn.xlarge"
-}
-
-variable "ssh_cidr" {
+  description = "EC2 instance type"
   type        = string
-  description = "CIDR allowed to SSH to the instance, for example 203.0.113.10/32."
+  default     = "g4dn.xlarge"
 }
 
 variable "ami_id" {
+  description = "Ubuntu 24.04 AMI ID"
   type        = string
-  description = "Ubuntu 24.04 AMI ID for the selected region."
 }
 
 variable "key_name" {
-  type = string
+  description = "EC2 key pair name"
+  type        = string
+  default     = "vllm_model-deployment"
+}
+
+variable "root_volume_size" {
+  description = "Root EBS volume size in GB"
+  type        = number
+  default     = 100
 }
