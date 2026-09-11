@@ -3,6 +3,9 @@
 .terraform/
 *.tfvars
 *.tfvars.json
+.tfvars.example
+.terraform.lock.hcl
+
 
 # Local credentials and secrets
 kubeconfig*
