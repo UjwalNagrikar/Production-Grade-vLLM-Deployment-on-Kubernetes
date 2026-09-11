@@ -1,0 +1,6 @@
+apiVersion: v2
+name: vllm
+description: GPU-backed vLLM OpenAI-compatible inference service
+version: 0.1.0
+appVersion: "0.10.2"
+type: application

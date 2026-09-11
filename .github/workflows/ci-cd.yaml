@@ -1,0 +1,45 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Helm lint
+        run: helm lint helm/vllm
+      - name: Install YAML parser
+        run: python -m pip install pyyaml
+      - name: YAML parse
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          for path in Path('.').rglob('*.yaml'):
+              if 'helm' in path.parts and 'templates' in path.parts:
+                continue
+              list(yaml.safe_load_all(path.read_text()))
+              print(path)
+          PY
+      - name: Render Helm chart
+        run: helm template qwen-vllm helm/vllm --namespace ai-inference > rendered.yaml
+      - name: Kubernetes schema validation
+        uses: stefanprodan/kube-tools@v1
+        with:
+          command: kubeconform
+          args: -strict -summary rendered.yaml
+      - name: Trivy configuration scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          hide-progress: true
+          exit-code: '1'
+          severity: HIGH,CRITICAL

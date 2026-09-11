@@ -1,0 +1,5 @@
+region        = "us-east-1"
+instance_type = "g4dn.xlarge"
+ssh_cidr      = "203.0.113.10/32"
+ami_id        = "ami-replace-me"
+key_name      = "replace-me"

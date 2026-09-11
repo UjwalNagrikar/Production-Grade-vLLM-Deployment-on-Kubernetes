@@ -1,0 +1,13 @@
+grafana:
+  enabled: true
+  adminPassword: change-me-before-use
+  ingress:
+    enabled: false
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    retention: 7d
+
+alertmanager:
+  enabled: true

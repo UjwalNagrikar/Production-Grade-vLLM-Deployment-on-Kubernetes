@@ -1,0 +1,34 @@
+image:
+  repository: vllm/vllm-openai
+  tag: v0.10.2
+  pullPolicy: IfNotPresent
+
+model: Qwen/Qwen2.5-3B-Instruct
+apiKey: ""
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "3"
+    memory: 12Gi
+    nvidia.com/gpu: "1"
+
+storage:
+  size: 40Gi
+  storageClassName: local-path
+
+service:
+  port: 8000
+
+ingress:
+  enabled: true
+  className: nginx
+  host: llm.example.com
+  tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
