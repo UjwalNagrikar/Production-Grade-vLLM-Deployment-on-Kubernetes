@@ -3,8 +3,27 @@
 .terraform/
 *.tfvars
 *.tfvars.json
+
+# Local credentials and secrets
 kubeconfig*
 .env
 .env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.secret
+*.secret.*
+.secrets/
+secrets/
+
+# Generated and local-only files
+rendered.yaml
+*.log
 __pycache__/
 .venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
