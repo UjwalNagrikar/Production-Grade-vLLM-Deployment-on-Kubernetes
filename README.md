@@ -1,65 +1,143 @@
 # vLLM Kubernetes Platform
 
-A single-node K3s platform for serving `Qwen/Qwen2.5-3B-Instruct` with vLLM on an NVIDIA T4 GPU.
+A single-node K3s platform for serving `Qwen/Qwen2.5-3B-Instruct` with vLLM on an NVIDIA T4 GPU. The project provisions an AWS GPU host, installs the Kubernetes and NVIDIA runtime components, deploys the model through Helm, and provides Prometheus/Grafana-compatible observability.
 
-This is a portfolio/lab deployment, not a highly available production cluster. The EC2 instance, K3s control plane, GPU, model cache, and observability stack are single points of failure.
+This is a portfolio and lab deployment, not a highly available production cluster. The EC2 instance, K3s control plane, GPU, model cache, and observability stack are single points of failure.
+
+## Project goals
+
+- Run an OpenAI-compatible LLM API on a GPU-backed Kubernetes workload.
+- Provision the underlying AWS infrastructure with Terraform.
+- Make model deployment repeatable with Helm and shell scripts.
+- Persist the Hugging Face model cache so pod restarts do not redownload the model.
+- Collect application, Kubernetes, node, and NVIDIA GPU metrics.
+- Validate infrastructure and Kubernetes configuration in GitHub Actions.
+
+## Technology stack
+
+| Area | Technology | Purpose |
+| --- | --- | --- |
+| Cloud | AWS EC2 `g4dn.xlarge` | Hosts the NVIDIA T4 GPU and single-node cluster |
+| Infrastructure | Terraform | Creates the EC2 instance, key pair, IAM role, security group, and encrypted EBS volume |
+| Operating system | Ubuntu 24.04 | Base operating system for the GPU host |
+| Container orchestration | K3s | Lightweight Kubernetes distribution for the single-node cluster |
+| GPU runtime | NVIDIA driver, NVIDIA Container Toolkit, NVIDIA device plugin | Makes the T4 available as `nvidia.com/gpu` to Kubernetes pods |
+| Inference server | vLLM OpenAI image `v0.10.2` | Serves `Qwen/Qwen2.5-3B-Instruct` and exposes the OpenAI-compatible API |
+| Packaging | Helm | Deploys and configures the vLLM workload |
+| Networking | NGINX Ingress Controller | Routes HTTP/HTTPS traffic to the vLLM service |
+| Storage | K3s `local-path` StorageClass and PVC | Stores the Hugging Face model cache on the node |
+| Monitoring | kube-prometheus-stack and NVIDIA DCGM exporter | Provides Prometheus, Grafana, Alertmanager, node, and GPU metrics |
+| Load testing | Locust | Exercises the chat completions endpoint |
+| CI validation | GitHub Actions, kubeconform, Trivy | Checks YAML, Helm rendering, Kubernetes schemas, and configuration risks |
 
 ## Architecture
 
 ```text
-Internet -> NGINX Ingress -> vLLM Service -> vLLM Deployment -> NVIDIA T4
+                         AWS account
+                             |
+          Terraform: VPC subnet, IAM, security group, EC2
+                             |
+                     Ubuntu 24.04 host
+                             |
+       NVIDIA driver + container toolkit + K3s control plane
+                             |
+       NVIDIA device plugin advertises one T4 GPU to Kubernetes
+                             |
+ Internet -> NGINX Ingress -> ClusterIP Service -> vLLM Deployment -> NVIDIA T4
                                       |
-                                      +-> PVC-backed Hugging Face model cache
+                                      +-> PVC -> Hugging Face model cache
 
-Prometheus <- vLLM metrics / node metrics / DCGM exporter -> Grafana
-GitHub Actions -> lint, schema validation, Trivy config scan
-Terraform -> VPC, subnet, security group, IAM, g4dn.xlarge
+ Prometheus <- vLLM / node metrics / DCGM exporter -> Grafana and Alertmanager
+ GitHub Actions -> Helm lint, YAML parse, kubeconform, Trivy config scan
 ```
+
+### Request flow
+
+1. DNS points the configured hostname, such as `llm.example.com`, at the host or load balancer.
+2. NGINX Ingress receives the request and forwards it to the `ClusterIP` service.
+3. The service selects the single vLLM pod in the `ai-inference` namespace.
+4. vLLM loads the model from the PVC-backed Hugging Face cache and uses the T4 for inference.
+5. Health probes use `/health`; model metadata and chat completions are available through `/v1` routes.
+
+### Default workload settings
+
+- Model: `Qwen/Qwen2.5-3B-Instruct`
+- Container image: `vllm/vllm-openai:v0.10.2`
+- Replicas: `1` with a `Recreate` deployment strategy
+- GPU request and limit: `1 x nvidia.com/gpu`
+- CPU request/limit: `2` / `3`
+- Memory request/limit: `8 GiB` / `12 GiB`
+- Model cache: `40 GiB` PVC using the K3s `local-path` StorageClass
+- vLLM port: `8000` inside the cluster
+- GPU memory utilization: `90%`
 
 ## Repository layout
 
-- `terraform/`: AWS networking, security group, IAM, and GPU EC2 instance.
-- `kubernetes/`: direct Kubernetes manifests for the platform.
-- `helm/vllm/`: reusable Helm chart for the inference workload.
-- `monitoring/`: Prometheus/Grafana values and NVIDIA DCGM exporter manifest.
+- `terraform/`: AWS provider configuration, infrastructure resources, variables, and outputs.
+- `kubernetes/`: direct Kubernetes manifests such as the application namespace.
+- `helm/vllm/`: reusable Helm chart for the vLLM Deployment, Service, Ingress, PVC, Secret, and ServiceMonitor.
+- `monitoring/`: kube-prometheus-stack values and NVIDIA DCGM exporter manifest.
 - `load-testing/`: Locust workload for the OpenAI-compatible endpoint.
-- `scripts/`: host bootstrap and deployment helpers.
-- `.github/workflows/ci-cd.yaml`: YAML, Helm, kubeconform, and Trivy checks.
+- `scripts/`: NVIDIA/K3s host bootstrap and application deployment helpers.
+- `docs/`: architecture, performance, and incident-test notes.
+- `.github/workflows/ci-cd.yaml`: repository validation workflow.
+- `Makefile`: shortcuts for linting, rendering, deployment, status, logs, and removal.
 
 ## Prerequisites
 
-- AWS account and credentials configured for Terraform.
-- An AWS region offering `g4dn.xlarge`.
-- Ubuntu 24.04 on the EC2 host.
-- A DNS name pointed at the host or load balancer.
-- `kubectl`, `helm`, `terraform`, and `k3s` access.
-- A Hugging Face token only if the selected model requires gated access. Qwen2.5 is normally public.
+### Local workstation
 
-## Quick start
+- AWS credentials configured for Terraform.
+- Terraform, Helm, and `kubectl` installed locally.
+- Git and an SSH client.
+- An AWS region offering `g4dn.xlarge` and an Ubuntu 24.04 AMI ID for that region.
+- A DNS record for the eventual ingress hostname, if the API will be accessed by name.
 
-### 1. Provision the host
+### AWS and host
+
+- Permission to create EC2, IAM, security group, key pair, and networking resources.
+- An Ubuntu 24.04 GPU-capable EC2 host. The default is `g4dn.xlarge` with one NVIDIA T4.
+- Enough root disk space for the OS, container images, logs, and the 40 GiB model cache. The Terraform default is a 100 GiB encrypted `gp3` volume.
+- A Hugging Face token only if a selected model requires gated access. The default Qwen model is normally public.
+
+## Deployment
+
+### 1. Provision AWS infrastructure
+
+From PowerShell at the repository root:
 
 ```powershell
-cd terraform
+Set-Location terraform
 terraform init
 Copy-Item terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your AMI ID, key name, region, and SSH CIDR.
+# Edit terraform.tfvars: ami_id, region, instance_type, key_name, and root_volume_size.
+terraform fmt -check
+terraform validate
 terraform plan -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 ```
 
-The security group intentionally does not expose port `8000`. Allow only SSH from your IP and HTTP/HTTPS for ingress.
+Save the Terraform outputs, especially `public_ip`, `public_dns`, and the sensitive generated `private_key`:
 
-### 2. Bootstrap the host
+```powershell
+terraform output public_ip
+terraform output public_dns
+terraform output -raw private_key | Set-Content -NoNewline .\vllm-k3s.pem
+icacls .\vllm-k3s.pem /inheritance:r /grant:r "$($env:USERNAME):(R)"
+```
 
-SSH to the instance and run:
+The private key is stored in Terraform state. Protect the state file and never commit it to source control.
+
+### 2. Install GPU support and K3s
+
+SSH to the new host, copy this repository to it, and run the bootstrap scripts from the repository root:
 
 ```bash
 sudo bash scripts/install-nvidia.sh
 sudo bash scripts/install-k3s.sh
 ```
 
-Reboot after the NVIDIA driver installation if `nvidia-smi` does not work immediately. Then verify:
+Reboot if `nvidia-smi` does not work immediately. Verify the host and GPU:
 
 ```bash
 nvidia-smi
@@ -77,15 +155,18 @@ helm upgrade --install nvidia-device-plugin nvdp/nvidia-device-plugin \
 kubectl get pods -n nvidia-device-plugin
 ```
 
-### 3. Deploy vLLM
+### 3. Deploy the inference service
 
-From the repository root:
+Set the DNS hostname through `INGRESS_HOST` and run the deployment helper:
 
 ```bash
+export INGRESS_HOST=llm.example.com
 bash scripts/deploy.sh
 ```
 
-Or use Helm directly:
+The helper creates the `ai-inference` namespace, installs or upgrades the `qwen-vllm` Helm release, waits up to 30 minutes for the Deployment, and prints the resulting resources.
+
+For a direct Helm deployment:
 
 ```bash
 helm upgrade --install qwen-vllm ./helm/vllm \
@@ -97,10 +178,35 @@ The first startup downloads the model into the PVC and can take several minutes.
 
 ```bash
 kubectl -n ai-inference get pods -w
-kubectl -n ai-inference get ingress
+kubectl -n ai-inference get pvc,service,ingress
+kubectl -n ai-inference rollout status deployment/qwen-vllm --timeout=30m
 ```
 
-### 4. Test the API
+### 4. Configure API authentication and TLS
+
+Create a private values file rather than putting credentials in the repository:
+
+```yaml
+apiKey: replace-with-a-secret
+ingress:
+  host: llm.example.com
+  tls:
+    - hosts:
+        - llm.example.com
+      secretName: llm-tls
+```
+
+Install with the private file:
+
+```bash
+helm upgrade --install qwen-vllm ./helm/vllm \
+  --namespace ai-inference --create-namespace \
+  -f private-values.yaml
+```
+
+The TLS secret must exist in `ai-inference` before the Ingress can terminate TLS. Add a certificate manager or create the secret through your chosen secret-management process.
+
+### 5. Test the API
 
 ```bash
 curl https://llm.example.com/health
@@ -108,11 +214,32 @@ curl https://llm.example.com/v1/models
 
 curl https://llm.example.com/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer replace-me' \
+  -H 'Authorization: Bearer replace-with-a-secret' \
   -d '{"model":"Qwen/Qwen2.5-3B-Instruct","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":32}'
 ```
 
-Set `vllm.apiKey` in a private values file or secret workflow before exposing the endpoint. TLS is also expected to be configured in the ingress values before internet exposure.
+## Day-to-day operations
+
+The Makefile provides common commands from the repository root:
+
+```bash
+make lint     # Helm lint
+make render   # Render Kubernetes YAML locally
+make deploy   # Install or upgrade the qwen-vllm release
+make status   # Show workloads, PVC, and Ingress
+make logs     # Follow vLLM logs
+make destroy  # Uninstall the Helm release
+```
+
+Useful troubleshooting commands:
+
+```bash
+kubectl -n ai-inference describe pod -l app.kubernetes.io/name=vllm
+kubectl -n ai-inference logs deploy/qwen-vllm
+kubectl -n ai-inference get events --sort-by=.lastTimestamp
+kubectl get nodes -o wide
+nvidia-smi
+```
 
 ## Monitoring
 
@@ -127,35 +254,64 @@ helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
 kubectl apply -f monitoring/dcgm-exporter.yaml
 ```
 
-The vLLM ServiceMonitor scrapes `/metrics`. Grafana dashboards should track request rate, latency, tokens, GPU utilization, GPU memory, pod restarts, and error rate.
+The chart exposes vLLM metrics through `/metrics` and includes a ServiceMonitor. Monitor request rate, error rate, latency, time to first token, tokens per second, pod restarts, GPU utilization, GPU memory, and model load time.
 
-## Load test
+## Load testing
+
+Install Locust and point it at the deployed endpoint:
 
 ```bash
 pip install locust
-VLLM_BASE_URL=https://llm.example.com VLLM_API_KEY=replace-me \
+VLLM_BASE_URL=https://llm.example.com VLLM_API_KEY=replace-with-a-secret \
   locust -f load-testing/locustfile.py
 ```
 
-Start with 10, 25, and 50 users. Record P50/P95/P99 latency, time to first token, tokens per second, error rate, and GPU utilization. Do not begin with 100 users on a single T4 without observing saturation.
+Start with 10, 25, and 50 users. Record P50/P95/P99 latency, time to first token, tokens per second, error rate, and GPU utilization. Do not begin with 100 users on a single T4 without observing saturation. See `docs/performance.md` for the performance test record.
 
-## Failure tests
+## Failure testing
+
+Exercise pod recovery with:
 
 ```bash
 kubectl -n ai-inference delete pod -l app.kubernetes.io/name=vllm
-kubectl -n ai-inference rollout status deployment/qwen-vllm
+kubectl -n ai-inference rollout status deployment/qwen-vllm --timeout=30m
 ```
 
-Document model reload time, recovery behavior, and the interval during which traffic is unavailable. A node or EC2 failure still takes the entire service offline.
+Record model reload time, recovery behavior, and the interval during which traffic is unavailable. A node or EC2 failure still takes the entire service offline. See `docs/incident-test.md` for the incident-test checklist.
 
-## CI
+## CI and validation
 
-The workflow runs YAML parsing, Helm linting, Kubernetes schema validation, and Trivy configuration scanning. Deployment is deliberately not automatic until a real cluster credential strategy is selected.
+GitHub Actions runs on pushes and pull requests. The workflow:
 
-## Security notes
+1. Lints the Helm chart.
+2. Parses non-template YAML files.
+3. Renders the Helm chart.
+4. Validates rendered resources against Kubernetes schemas with kubeconform.
+5. Scans the repository configuration with Trivy for high and critical findings.
 
-- Keep EC2 port `8000` closed to the internet.
-- Put the endpoint behind HTTPS and an authentication layer.
-- Do not commit API keys, Hugging Face tokens, kubeconfigs, or Terraform state.
-- vLLM's API key flag is endpoint-level protection, not a complete security boundary for every HTTP route.
-- Add a real ingress TLS secret and authentication middleware before public use.
+Deployment is deliberately not automatic until a cluster credential and release strategy are selected.
+
+## Security and production limitations
+
+- The current Terraform security group contains an allow-all inbound rule. Restrict it before deployment to SSH from an administrator IP and HTTP/HTTPS only, or replace it with a load balancer and private node access.
+- Keep the vLLM service port `8000` private; access it through the Ingress or an internal tunnel.
+- Put the endpoint behind HTTPS and authentication. The vLLM API key is endpoint-level protection, not a complete security boundary for every HTTP route.
+- Do not commit API keys, Hugging Face tokens, kubeconfigs, private keys, or Terraform state.
+- Add a real Ingress TLS secret and authentication middleware before public use.
+- This topology has one node, one GPU, one model cache, and one control plane. It has no failover, rolling capacity, or durable cross-node storage.
+- The default `local-path` PVC is node-local. Replacing the EC2 instance requires restoring or redownloading the model.
+
+## Teardown
+
+Remove the Kubernetes release first, then destroy the AWS resources when the environment is no longer needed:
+
+```bash
+make destroy
+```
+
+```powershell
+Set-Location terraform
+terraform destroy -var-file=terraform.tfvars
+```
+
+Review the Terraform plan carefully before destroying resources. The generated key pair and encrypted EBS volume are also removed with the stack.
