@@ -22,10 +22,14 @@ spec:
         prometheus.io/path: /metrics
     spec:
       terminationGracePeriodSeconds: 60
+      runtimeClassName: nvidia
       containers:
         - name: vllm
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - vllm
+            - serve
           args:
             - "{{ .Values.model }}"
             - --host
@@ -39,6 +43,8 @@ spec:
             - "$(VLLM_API_KEY)"
             {{- end }}
           env:
+            - name: VLLM_USE_FLASHINFER_SAMPLER
+              value: "0"
             {{- if .Values.apiKey }}
             - name: VLLM_API_KEY
               valueFrom:
