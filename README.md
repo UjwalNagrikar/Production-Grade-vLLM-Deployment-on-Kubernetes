@@ -85,6 +85,164 @@ This is a portfolio and lab deployment, not a highly available production cluste
 
 ## Prerequisites
 
+## Required tools and installation commands
+
+Use the following commands to prepare both the local machine and the Ubuntu GPU host used by this project.
+
+### 1. Install required tools on your local workstation
+
+The local machine is used for Terraform, Helm, `kubectl`, Git, SSH, AWS authentication, and optionally Python/Locust.
+
+#### Windows PowerShell (recommended)
+
+```powershell
+winget install --id Git.Git -e
+winget install --id Hashicorp.Terraform -e
+winget install --id Helm.Helm -e
+winget install --id Kubernetes.kubectl -e
+winget install --id Amazon.AWSCLI -e
+winget install --id Python.Python.3.12 -e
+```
+
+Verify the tools:
+
+```powershell
+git --version
+terraform version
+helm version
+kubectl version --client
+aws --version
+python --version
+pip --version
+```
+
+If you prefer Chocolatey:
+
+```powershell
+choco install git terraform kubernetes-cli kubernetes-helm awscli python -y
+```
+
+#### macOS
+
+```bash
+brew install git terraform helm kubectl awscli python
+```
+
+#### Ubuntu/Debian
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl git unzip ca-certificates gnupg lsb-release openssh-client
+curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt-get update
+sudo apt-get install -y terraform
+
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin/
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+sudo apt-get install -y python3 python3-pip
+```
+
+Install Locust for load testing if needed:
+
+```bash
+pip install locust
+```
+
+#### Configure AWS credentials
+
+```bash
+aws configure
+```
+
+Set the AWS region and create a valid profile before running Terraform:
+
+```bash
+export AWS_PROFILE=default
+export AWS_REGION=us-west-2
+aws sts get-caller-identity
+```
+
+### 2. Install the required packages on the Ubuntu GPU host
+
+This project expects an Ubuntu 24.04 EC2 host with an NVIDIA T4 GPU. The host must have internet access, a public IP or a reachable SSH endpoint, and permission to install NVIDIA and K3s components.
+
+Run the following on the host:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl ca-certificates gnupg apt-transport-https software-properties-common
+```
+
+Install the NVIDIA driver and toolkit:
+
+```bash
+sudo bash scripts/install-nvidia.sh
+```
+
+The script performs the equivalent of:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ubuntu-drivers-common
+sudo ubuntu-drivers install
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=containerd
+sudo systemctl restart containerd || true
+nvidia-smi
+```
+
+Install K3s:
+
+```bash
+sudo bash scripts/install-k3s.sh
+```
+
+The script runs:
+
+```bash
+curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl get nodes
+```
+
+Install Helm on the host if you want to manage charts directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+helm version
+```
+
+Install the NVIDIA device plugin in the cluster:
+
+```bash
+helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
+helm repo update
+helm upgrade --install nvidia-device-plugin nvdp/nvidia-device-plugin \
+  --namespace nvidia-device-plugin --create-namespace
+kubectl get pods -n nvidia-device-plugin
+```
+
+### 3. Validation commands
+
+After the install steps above, confirm the environment is ready:
+
+```bash
+nvidia-smi
+kubectl get nodes
+kubectl describe node | grep -A3 nvidia.com/gpu
+helm version
+terraform version
+```
+
 ### Local workstation
 
 - AWS credentials configured for Terraform.

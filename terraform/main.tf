@@ -142,8 +142,7 @@ output "key_name" {
   value       = aws_key_pair.vllm.key_name
 }
 
-output "private_key" {
-  description = "Generated SSH private key - SAVE THIS SECURELY"
-  value       = tls_private_key.vllm.private_key_openssh
-  sensitive   = true
+output "private_key_pem" {
+  value     = tls_private_key.vllm.private_key_pem
+  sensitive = true
 }
