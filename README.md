@@ -61,53 +61,7 @@ This is a portfolio and lab deployment, not a highly available production cluste
 
 ### Deployment architecture diagram
 
-```mermaid
-flowchart TB
-    subgraph P[Provisioning: Node Substrate]
-        direction TB
-        A[Terraform]
-        B[EC2 GPU host
-Ubuntu 24.04]
-        C[K3s cluster]
-        D[NVIDIA driver + toolkit]
-        E[NVIDIA device plugin]
-        F[GPU-enabled node]
-    end
-
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
-
-    subgraph O[Observability and app stack]
-        direction LR
-        G[Prometheus / Grafana]
-        H[DCGM exporter]
-        I[NGINX Ingress]
-        J[vLLM Deployment]
-        K[PVC-backed model cache]
-        L[OpenAI-compatible API]
-    end
-
-    F --> I
-    I --> J
-    J --> K
-    J --> L
-    H --> G
-    J --> G
-
-    subgraph V[Validation]
-        direction TB
-        M[Helm lint]
-        N[Kubeconform]
-        O2[Trivy scans]
-    end
-
-    A --> M
-    A --> N
-    A --> O2
-```
+![vLLM deployment architecture](docs/diagram.png)
 
 ### vLLM model deployment guide
 
