@@ -59,6 +59,122 @@ This is a portfolio and lab deployment, not a highly available production cluste
 4. vLLM loads the model from the PVC-backed Hugging Face cache and uses the T4 for inference.
 5. Health probes use `/health`; model metadata and chat completions are available through `/v1` routes.
 
+### Deployment architecture diagram
+
+```mermaid
+flowchart TB
+    subgraph P[Provisioning: Node Substrate]
+        direction TB
+        A[Terraform]
+        B[EC2 GPU host
+Ubuntu 24.04]
+        C[K3s cluster]
+        D[NVIDIA driver + toolkit]
+        E[NVIDIA device plugin]
+        F[GPU-enabled node]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+
+    subgraph O[Observability and app stack]
+        direction LR
+        G[Prometheus / Grafana]
+        H[DCGM exporter]
+        I[NGINX Ingress]
+        J[vLLM Deployment]
+        K[PVC-backed model cache]
+        L[OpenAI-compatible API]
+    end
+
+    F --> I
+    I --> J
+    J --> K
+    J --> L
+    H --> G
+    J --> G
+
+    subgraph V[Validation]
+        direction TB
+        M[Helm lint]
+        N[Kubeconform]
+        O2[Trivy scans]
+    end
+
+    A --> M
+    A --> N
+    A --> O2
+```
+
+### vLLM model deployment guide
+
+Use the following sequence to deploy the model on the cluster and validate that the inference API is serving requests.
+
+1. Provision the GPU host and base Kubernetes node.
+   - Run the Terraform configuration in `terraform/` to create the EC2 instance, security group, IAM role, and EBS volume.
+   - Ensure the host is reachable by SSH and has internet access for package installation.
+
+2. Install NVIDIA support and K3s.
+   - Run `sudo bash scripts/install-nvidia.sh` on the GPU host.
+   - Run `sudo bash scripts/install-k3s.sh` to install the Kubernetes control plane.
+   - Confirm the node registers successfully with `kubectl get nodes`.
+
+3. Install the GPU device plugin.
+
+   ```bash
+   helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
+   helm repo update
+   helm upgrade --install nvidia-device-plugin nvdp/nvidia-device-plugin \
+     --namespace nvidia-device-plugin --create-namespace
+   kubectl get pods -n nvidia-device-plugin
+   ```
+
+4. Deploy the model with Helm.
+   - The chart in `helm/vllm/` creates the namespace, PVC, deployment, service, ingress, and monitoring resources.
+   - By default it deploys `Qwen/Qwen2.5-3B-Instruct` with the vLLM OpenAI-compatible image.
+
+   ```bash
+   helm upgrade --install vllm ./helm/vllm \
+     --namespace ai-inference \
+     --create-namespace
+   ```
+
+5. Verify the workload.
+
+   ```bash
+   kubectl get pods -n ai-inference
+   kubectl get svc -n ai-inference
+   kubectl logs -n ai-inference deployment/vllm
+   ```
+
+6. Test the inference endpoint.
+
+   ```bash
+   kubectl port-forward -n ai-inference svc/vllm 8000:8000
+   curl http://127.0.0.1:8000/v1/models
+   curl http://127.0.0.1:8000/health
+   ```
+
+7. Run a sample chat completion request.
+
+   ```bash
+   curl http://127.0.0.1:8000/v1/chat/completions \
+     -H "Content-Type: application/json" \
+     -d '{
+       "model": "Qwen/Qwen2.5-3B-Instruct",
+       "messages": [{"role": "user", "content": "Write a short Kubernetes deployment summary."}],
+       "temperature": 0.7,
+       "max_tokens": 200
+     }'
+   ```
+
+8. Optional: enable monitoring and load testing.
+   - Review the Prometheus/Grafana values in `monitoring/`.
+   - Use Locust in `load-testing/locustfile.py` to test traffic and throughput.
+
 ### Default workload settings
 
 - Model: `Qwen/Qwen2.5-3B-Instruct`
