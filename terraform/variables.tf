@@ -13,6 +13,7 @@ variable "instance_type" {
 variable "ami_id" {
   description = "Ubuntu 24.04 AMI ID"
   type        = string
+  default     = "ami-0ba4172b23e57d5a8"
 }
 
 variable "key_name" {
